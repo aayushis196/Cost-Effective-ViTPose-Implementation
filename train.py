@@ -22,61 +22,81 @@ from LoadDataset import LoadDataset
 from VIT_Modules import ViTPose, ClassicDecoder
 
 def train_ViTPose(
-    model,
-    train_loader,
+    pose,
+    data_loader,
     learning_rate: float = 5e-3,
     weight_decay: float = 1e-4,
-    max_iters: int = 500,
+    max_iters: int = 5000,
     log_period: int = 20,
     num_epochs = 10,
     device: str = "cuda",
-    model_save_path: str  =  " " ):
-
+):
     """
-    Train ViTmodel We use adamW optimizer and step decay.
+    Train ViTPose. We use adamW optimizer and step decay.
     """
-    
-    model.to(device=device)
     HeatmapLoss =  AdaptiveWingLoss(use_target_weight=True)
+    pose.to(device=device)
+    
 
-    #   Optimizer: use adamW
-    #   Use SGD with momentum:
-    optimizer = optim.adamW(model.params, learning_rate, betas=(0.9, 0.999))
+      # Optimizer: use adamW
+      # Use SGD with momentum:
+    optimizer = optim.adamW(params, lr=0.001, betas=(0.9, 0.999))
+
     for epoch in num_epochs:  
 
-      
-        # Keep track of training loss for plotting.
-        loss_history = []
-
-        # detector.train()
+      # Keep track of training loss for plotting.
+      train_loss_history = []
+      val_loss_history= []
+            # Each epoch has a training and validation phase
+      for phase in ['train', 'val']:
+          if phase == 'train':
+              pose.train()  # Set model to training mode
+          else:
+              pose.eval()   # Set model to evaluate mode
+      # detector.train()
         
-        total_loss=torch.tensor(0.0)
-        for _iter in range(max_iters):
-            # Ignore first arg (image path) during training.
-            images, target_heatmap, t_h_weight  = next(iter(train_loader))
-            t_h_weight = rearrange(t_h_weight, "B C H W ->  B H C W")
-            images = images.to(device)
+          total_loss=torch.tensor(0.0)
+          for _iter in range(max_iters):
 
-            model.zero_grad()
+              images, target_heatmap, t_h_weight  = next(iter(data_loader[phase]))           #Seperate for train and eval
+              images = images.to(device)
+              target_heatmap=target_heatmap.to(device)
+              t_h_weight = rearrange(t_h_weight, "B C H W ->  B H C W")
+              t_h_weight=t_h_weight.to(device)
 
-            generated_heatmaps = model(images)
+              if phase=='Train':
 
-            # Dictionary of loss scalars.
-            losses = HeatmapLoss(generated_heatmaps, target_heatmap, t_h_weight)
+                  pose.zero_grad()
+                  
+                  generated_heatmaps= pose(images)
 
-            total_loss+=losses
+                  # Dictionary of loss scalars.
+                  losses = HeatmapLoss(images, target_heatmap, t_h_weight)
 
-            losses.backward()
-            optimizer.step()
-           
+                  total_loss+=losses
 
-        # Print losses periodically.
-        loss_str = f"[Epoch {epoch}][loss: {losses:.3f}]"
-        for key, value in losses.items():
-            loss_str += f"[{key}: {value:.3f}]"
-            
-        print(loss_str)
-        loss_history.append(total_loss.item())
+                  losses.backward()
+                  optimizer.step()
+
+              elif phase=='val':
+                  with torch.no_grad():
+                     generated_heatmaps = pose(images)
+                     losses = HeatmapLoss(images, target_heatmap, t_h_weight)
+
+              total_loss+=losses
+
+          # Print losses periodically.
+          loss_str = f"[Epoch {epoch}][Phase {phase}][loss: {total_loss*images.size(0)/(max_iters):.3f}]"
+          # for key, value in losses.items():
+          #     loss_str += f"[{key}: {value:.3f}]"
+              
+          print(loss_str)
+
+          if phase == 'train':
+              train_loss_history.append(total_loss.item())  
+          else:
+              val_loss_history.append(total_loss.item())
+
 
     # Plot training loss.
     torch.save(model.state_dict(), model_save_path)
