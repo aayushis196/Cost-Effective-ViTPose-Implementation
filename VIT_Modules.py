@@ -19,10 +19,13 @@ from torchsummary import summary
 pre_trained_weights_path = "/home/biped-lab/504_project/pretrain/mae_pretrain_vit_base.pth"
 pre_trained_weights = torch.load(pre_trained_weights_path)
 weights = pre_trained_weights["model"]
-
+device = "cuda"
 class PatchEmbedding(nn.Module):
-    def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 768, img_size: np.ndarray = [192, 256]):
+    def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 768, img_size: tuple = (224,224)):
+
         self.patch_size = patch_size
+        self.img_size = img_size
+        self.emb_size = emb_size
         super().__init__()
         self.projection = nn.Sequential(
             # using a conv layer instead of a linear one -> performance gains
@@ -33,9 +36,10 @@ class PatchEmbedding(nn.Module):
         # self.cls_token = nn.Parameter(torch.randn(1,1,emb_size))
         # self.positions = nn.Parameter(torch.randn(int((img_size[0]//patch_size)*(img_size[1]//patch_size)) + 1, emb_size))
         
-        self.cls_token = nn.Parameter(weights["cls_token"])
-        self.positions = nn.Parameter(weights["pos_embed"])
-
+        # self.cls_token = nn.Parameter(weights["cls_token"])
+        self.positions = self.reshape_position_embedding()
+        
+        
         self.projection.weight = nn.Parameter(weights["patch_embed.proj.weight"])
         self.projection.bias = nn.Parameter(weights["patch_embed.proj.bias"])
 
@@ -43,11 +47,31 @@ class PatchEmbedding(nn.Module):
                 
     def forward(self, x: Tensor) -> Tensor:
         b,_,_,_ = x.shape
+        # print(x.shape)
         x = self.projection(x)
-        cls_tokens = repeat(self.cls_token,'() n e -> b n e',b=b)
-        x = torch.cat([cls_tokens,x], dim = 1)
-        x += self.positions
+        # cls_tokens = repeat(self.cls_token,'() n e -> b n e',b=b)
+        # x = torch.cat([cls_tokens,x], dim = 1)
+        x  =  x + self.positions[:,1:] + self.positions[:,:1]
         return x
+
+    def reshape_position_embedding(self):
+
+        pos_embed_temp = nn.Parameter(weights["pos_embed"])
+        num_patches = (self.img_size[0]//self.patch_size) * (self.img_size[1]//self.patch_size)
+        original_size = int((pos_embed_temp.shape[-2] - 1)**0.5)
+        patches_along_height = (self.img_size[0]//self.patch_size)
+        patches_along_width =  (self.img_size[1]//self.patch_size)
+        cls_token = pos_embed_temp[:,:1]
+        pos_tokens = pos_embed_temp[:,1:]
+        
+        pos_tokens = pos_tokens.reshape(-1,original_size,original_size,self.emb_size).permute(0,3,1,2)
+
+        pos_tokens = torch.nn.functional.interpolate(
+            pos_tokens, size=(patches_along_height, patches_along_width), mode='bicubic', align_corners=False)
+        pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
+        new_pos_embed = torch.cat((cls_token, pos_tokens), dim=1)
+
+        return new_pos_embed.to(device)
 
 
 class MultiHeadAttention(nn.Module):
@@ -134,18 +158,18 @@ class FeedForwardBlock(nn.Module):
         output = self.feed_forward_block(input)
         return output
 
-class RearrangeOutput(nn.Module):
-    def __init__(self, img_size, patch_size):
-        super().__init__()
-        self.linear=nn.Linear((img_size[0]//patch_size)*(img_size[1]//patch_size)+1,(img_size[0]//patch_size)*(img_size[1]//patch_size))
-        self.img_size = img_size
-        self.patch_size=patch_size
+# class RearrangeOutput(nn.Module):
+#     def __init__(self, img_size, patch_size):
+#         super().__init__()
+#         self.linear=nn.Linear((img_size[0]//patch_size)*(img_size[1]//patch_size)+1,(img_size[0]//patch_size)*(img_size[1]//patch_size))
+#         self.img_size = img_size
+#         self.patch_size=patch_size
         
         
-    def forward(self, x, **kwargs):
-        x = self.linear(x)
-        x = rearrange(x, "b (h n) d -> b h n d", h=self.img_size[0]//self.patch_size)
-        return x
+#     def forward(self, x, **kwargs):
+#         x = self.linear(x)
+#         x = rearrange(x, "b (h n) d -> b h n d", h=self.img_size[0]//self.patch_size)
+#         return x
 
 class TransformerEncoderBlock(nn.Sequential):
     def __init__(self,
@@ -188,6 +212,8 @@ class TransformerEncoder(nn.Sequential):
 
 class ClassicDecoder(nn.Module):
     def __init__(self,     
+                img_size,
+                patch_size,
                 in_channels: int = 768,
                 kernel_size = (4,4),
                 deconv_filter = 256,
@@ -195,7 +221,8 @@ class ClassicDecoder(nn.Module):
                 ):
     
         super().__init__()
-
+        self.img_size = img_size
+        self.patch_size = patch_size
         self.deconv_layers = nn.Sequential(
                                 nn.ConvTranspose2d(in_channels = in_channels,
                                                 out_channels= deconv_filter,
@@ -203,7 +230,7 @@ class ClassicDecoder(nn.Module):
                                                 stride = 2,
                                                 padding = 1,
                                                 output_padding = 0),
-                                nn.BatchNorm1d(deconv_filter),
+                                nn.BatchNorm2d(deconv_filter),
                                 nn.ReLU(inplace=True),
 
                                 nn.ConvTranspose2d(in_channels = deconv_filter,
@@ -212,7 +239,7 @@ class ClassicDecoder(nn.Module):
                                                 stride=2,
                                                 padding=1,
                                                 output_padding=0),
-                                nn.BatchNorm1d(deconv_filter),
+                                nn.BatchNorm2d(deconv_filter),
                                 nn.ReLU(inplace = True)
         )
 
@@ -223,8 +250,14 @@ class ClassicDecoder(nn.Module):
                                         padding=0)
 
     def forward(self,input):
+        B,_,_= input.shape
+
+        input = input.permute(0,2,1).reshape(B,-1,self.img_size[0]//self.patch_size,self.img_size[1]//self.patch_size)
+        
         deconv_output = self.deconv_layers(input)
+        
         output = self.last_convolution(deconv_output)
+        
         return output
 
 class ViT(nn.Sequential):
@@ -241,8 +274,9 @@ class ViT(nn.Sequential):
         super().__init__(
             PatchEmbedding(in_channels, patch_size, emb_size, img_size),
             TransformerEncoder(depth, emb_size=emb_size),
-            RearrangeOutput(img_size, patch_size),                               #Rearrange the output as per paper
-            ClassicDecoder(emb_size, kernel_size, deconv_filter, out_channels)
+            
+            # RearrangeOutput(img_size, patch_size),                               #Rearrange the output as per paper
+            
         )
 
 class ViTPose(nn.Module):
@@ -260,10 +294,10 @@ class ViTPose(nn.Module):
 
 
         self.model = ViT(in_channels,patch_size,emb_size,img_size,depth,kernel_size,deconv_filter,out_channels)
-
+        self.decoder = ClassicDecoder(img_size,patch_size,emb_size, kernel_size, deconv_filter, out_channels)
     def forward(self,image):
         out = self.model(image)
-
-        return out
+        output = self.decoder(out)
+        return output
        
         

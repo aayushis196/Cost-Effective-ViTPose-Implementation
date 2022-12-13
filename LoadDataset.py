@@ -50,7 +50,7 @@ class LoadDataset(Dataset):
                             # to-tensor
                             transforms.ToTensor(),
                             # resize
-                            transforms.Resize((256,192)),
+                            transforms.Resize((self.image_size[0],self.image_size[1])),
                             # normalize
                             transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
                         ])
@@ -76,16 +76,23 @@ class LoadDataset(Dataset):
 
     def __getitem__(self, index):
         """Returns one data pair (image and caption)."""
-        print("IN get item")
+     
+        
+            
+        flag = False
         image_data = self.db[index]
         img_path = image_data['image_file']
+        if(index == 0):
+            flag = True
+            print("Joints visible: ", image_data["joints_3d_visible"])
+
         image_data["image"]  = Image.open(os.path.normpath(img_path)).convert('RGB')
 
         image_data["image"], image_data["joints_3d"] = self.get_affine_transform(image_data)
         image = self.transform(image_data["image"])
 
-        target, target_weight = self._udp_generate_target(image_data["joints_3d"], image_data["joints_3d_visible"], 2)
-
+        target, target_weight = self._udp_generate_target(image_data["joints_3d"], image_data["joints_3d_visible"], 0.5,flag)
+        
         target = self.transform_to_tensor(target)
         target_weight = self.transform_to_tensor(target_weight)
 
@@ -294,7 +301,7 @@ class LoadDataset(Dataset):
             mat.T).reshape(shape)
 
 
-    def _udp_generate_target(self, joints_3d, joints_3d_visible, sigma):
+    def _udp_generate_target(self, joints_3d, joints_3d_visible, sigma,flag):
         """Generate the target heatmap via 'UDP' approach. Paper ref: Huang et
         al. The Devil is in the Details: Delving into Unbiased Data Processing
         for Human Pose Estimation (CVPR 2020).
@@ -339,16 +346,21 @@ class LoadDataset(Dataset):
         y = x[:, None]
        
         for joint_id in range(num_joints):
+
             feat_stride_x = (image_size[0] - 1.0) / (heatmap_size[0] - 1.0)
             feat_stride_y = (image_size[1] - 1.0) / (heatmap_size[1] - 1.0)
             mu_x = int(joints_3d[joint_id][0] / feat_stride_x + 0.5)
             mu_y = int(joints_3d[joint_id][1] / feat_stride_y + 0.5)
+
             # Check that any part of the gaussian is in-bounds
             ul = [int(mu_x - tmp_size), int(mu_y - tmp_size)]
             br = [int(mu_x + tmp_size + 1), int(mu_y + tmp_size + 1)]
-            if ul[0] >= heatmap_size[0] or ul[1] >= heatmap_size[1] \
-                    or br[0] < 0 or br[1] < 0:
+
+            if flag: print(f"Joint id: {joint_id}, x,y:{joints_3d[joint_id]}, feat stride:{feat_stride_x}, mu_x:{mu_x}, mu_y:{mu_y}, br:{br}, heatmap_size:{heatmap_size}")
+
+            if ul[0] >= heatmap_size[0] or ul[1] >= heatmap_size[1] or br[0] < 0 or br[1] < 0:
                 # If not, just return the image as is
+                if flag: print("HERE, jointid: ",joint_id)
                 target_weight[joint_id] = 0
                 continue
 
@@ -371,6 +383,7 @@ class LoadDataset(Dataset):
             if v > 0.5:
                 target[joint_id][img_y[0]:img_y[1], img_x[0]:img_x[1]] = \
                     g[g_y[0]:g_y[1], g_x[0]:g_x[1]]
+
         return np.moveaxis(target,0,-1), target_weight
 
     
