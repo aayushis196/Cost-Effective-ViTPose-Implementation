@@ -76,22 +76,16 @@ class LoadDataset(Dataset):
 
     def __getitem__(self, index):
         """Returns one data pair (image and caption)."""
-     
-        
-            
-        flag = False
+       
         image_data = self.db[index]
         img_path = image_data['image_file']
-        if(index == 0):
-            flag = True
-            print("Joints visible: ", image_data["joints_3d_visible"])
 
         image_data["image"]  = Image.open(os.path.normpath(img_path)).convert('RGB')
 
         image_data["image"], image_data["joints_3d"] = self.get_affine_transform(image_data)
         image = self.transform(image_data["image"])
 
-        target, target_weight = self._udp_generate_target(image_data["joints_3d"], image_data["joints_3d_visible"], 0.5,flag)
+        target, target_weight = self._udp_generate_target(image_data["joints_3d"], image_data["joints_3d_visible"], 0.5)
         
         target = self.transform_to_tensor(target)
         target_weight = self.transform_to_tensor(target_weight)
@@ -246,9 +240,11 @@ class LoadDataset(Dataset):
                     flags=cv2.INTER_LINEAR) for i in np.array(img)
             ]
 
-            joints_3d[:, 0:2] = \
-                self.warp_affine_joints(joints_3d[:, 0:2].copy(), trans)
+     
+
+        joints_3d[:, 0:2] = self.warp_affine_joints(joints_3d[:, 0:2].copy(), trans)
         
+
         return img, joints_3d     
 
     def get_warp_matrix(self, theta, size_input, size_dst, size_target):
@@ -301,7 +297,7 @@ class LoadDataset(Dataset):
             mat.T).reshape(shape)
 
 
-    def _udp_generate_target(self, joints_3d, joints_3d_visible, sigma,flag):
+    def _udp_generate_target(self, joints_3d, joints_3d_visible, sigma):
         """Generate the target heatmap via 'UDP' approach. Paper ref: Huang et
         al. The Devil is in the Details: Delving into Unbiased Data Processing
         for Human Pose Estimation (CVPR 2020).
@@ -356,11 +352,10 @@ class LoadDataset(Dataset):
             ul = [int(mu_x - tmp_size), int(mu_y - tmp_size)]
             br = [int(mu_x + tmp_size + 1), int(mu_y + tmp_size + 1)]
 
-            if flag: print(f"Joint id: {joint_id}, x,y:{joints_3d[joint_id]}, feat stride:{feat_stride_x}, mu_x:{mu_x}, mu_y:{mu_y}, br:{br}, heatmap_size:{heatmap_size}")
-
+            
             if ul[0] >= heatmap_size[0] or ul[1] >= heatmap_size[1] or br[0] < 0 or br[1] < 0:
                 # If not, just return the image as is
-                if flag: print("HERE, jointid: ",joint_id)
+                
                 target_weight[joint_id] = 0
                 continue
 

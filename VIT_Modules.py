@@ -20,6 +20,7 @@ pre_trained_weights_path = "/home/biped-lab/504_project/pretrain/mae_pretrain_vi
 pre_trained_weights = torch.load(pre_trained_weights_path)
 weights = pre_trained_weights["model"]
 device = "cuda"
+
 class PatchEmbedding(nn.Module):
     def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 768, img_size: tuple = (224,224)):
 
