@@ -24,23 +24,17 @@ class LoadDataset(Dataset):
         """Set the path for images, captions and vocabulary wrapper.
         
         Args:
-            img_directory: image directory.
-            json: coco annotation file path.
-            vocab: vocabulary wrapper.
-            transform: image transformer.
+            img_directory: image directory- train/val/test images directory.
+            annotation_path: coco annotation file path contains keypoint data.
+            image_size: image size.
+            heatmap_size: heatmap size.
+            test_mode: Training or test mode 
         """
         self.img_directory = img_directory
         self.coco = COCO(annotation_path)
         self.img_ids = self.coco.getImgIds()
         self.num_joints = 17
-        self.use_gt_bbox = False  #why are we using GT boxes and bounding boxes? 
-        self.bbox_file = "/content/drive/MyDrive/EECS 504 Project/Dataset/annotations/person_keypoints_train2017.json"      # ?? Apparently for testing we use bounding boxes and for training we use keypoints: BB are used in the loss function, distances are normalized based on the size of bb. So they should be used in test as well
-        self.det_bbox_thr = 00 #0.0
-        self.use_nms =  True           #True
-        self.soft_nms = False
-        self.nms_thr = 1.0
-        self.oks_thr = 0.9    #What is oks_threshold?
-        self.vis_thr = 0.2    #what is vis_threshold?
+        self.bbox_file = "/home/biped-lab/504_project/coco/annotations/person_keypoints_train2017.json"
         self.joint_weights = [1., 1., 1., 1., 1., 1., 1., 1.2, 1.2, 1.5, 1.5, 1., 1., 1.2, 1.2, 1.5, 1.5]
         self.test_mode = test_mode
         self.image_size = image_size
@@ -57,23 +51,11 @@ class LoadDataset(Dataset):
                         
         self.id2name,self.name2id = self._get_mapping_id_name()
 
-        self.db = self._get_db()
+        self.db = self._load_coco_keypoint_annotations()
         self.num_images = len(self.img_ids)
         print(f'=> num_images: {self.num_images}')
         print(f'=> load {len(self.db)} samples')
         
-    def _get_db(self):
-      """Load dataset."""
-      if (not self.test_mode) or self.use_gt_bbox:
-          # use ground truth bbox
-          #Train mode
-          gt_db = self._load_coco_keypoint_annotations()
-      else:
-          # use bbox from detection
-          # Test mode
-          gt_db = self._load_coco_person_detection_results()
-      return gt_db
-
     def __getitem__(self, index):
         """Returns one data pair (image and caption)."""
        
@@ -96,80 +78,76 @@ class LoadDataset(Dataset):
         return len(self.img_ids)
 
     def _load_coco_keypoint_annotations(self):
-        """Ground truth bbox and keypoints."""
+        """load annotation from COCOAPI.
+         Note:
+          bbox:[x1, y1, w, h]
+         Args:
+          img_id: coco image id
+        Returns:
+          dict: db entry
+        """
         gt_db = []
         for img_id in self.img_ids:
-            gt_db.extend(self._load_coco_keypoint_annotation_kernel(img_id))
-        return gt_db
-
-    def _load_coco_keypoint_annotation_kernel(self, img_id):
-      """load annotation from COCOAPI.
-      Note:
-          bbox:[x1, y1, w, h]
-      Args:
-          img_id: coco image id
-      Returns:
-          dict: db entry
-      """
-      img_ann = self.coco.loadImgs(img_id)[0]
-      width = img_ann['width']
-      height = img_ann['height']
-      num_joints = self.num_joints
+            annotation = self.coco.loadImgs(img_id)[0]
+            width = annotation['width']
+            height = annotation['height']
+            num_joints = self.num_joints
     
-      ann_ids = self.coco.getAnnIds(imgIds=img_id, iscrowd=False)
-      objs = self.coco.loadAnns(ann_ids)
+            ann_ids = self.coco.getAnnIds(imgIds=img_id, iscrowd=False)
+            objs = self.coco.loadAnns(ann_ids)
 
-      # sanitize bboxes
-      valid_objs = []
-      for obj in objs:
-          if 'bbox' not in obj:
-              continue
-          x, y, w, h = obj['bbox']
-          x1 = max(0, x)
-          y1 = max(0, y)
-          x2 = min(width - 1, x1 + max(0, w - 1))
-          y2 = min(height - 1, y1 + max(0, h - 1))
-          if ('area' not in obj or obj['area'] > 0) and x2 > x1 and y2 > y1:
-              obj['clean_bbox'] = [x1, y1, x2 - x1, y2 - y1]
-              valid_objs.append(obj)
-      objs = valid_objs
+            # sanitize bboxes
+            valid_objs = []
+            for obj in objs:
+                if 'bbox' not in obj:
+                    continue
+                x, y, w, h = obj['bbox']
+                x1 = max(0, x)
+                y1 = max(0, y)
+                x2 = min(width - 1, x1 + max(0, w - 1))
+                y2 = min(height - 1, y1 + max(0, h - 1))
+                if ('area' not in obj or obj['area'] > 0) and x2 > x1 and y2 > y1:
+                    obj['clean_bbox'] = [x1, y1, x2 - x1, y2 - y1]
+                    valid_objs.append(obj)
+            objs = valid_objs
 
-      bbox_id = 0
-      rec = []
-      for obj in objs:
-          if 'keypoints' not in obj:
-              continue
-          if max(obj['keypoints']) == 0:
-              continue
-          if 'num_keypoints' in obj and obj['num_keypoints'] == 0:
-              continue
-          joints_3d = np.zeros((num_joints, 3), dtype=np.float32)
-          joints_3d_visible = np.zeros((num_joints, 3), dtype=np.float32)
+            bbox_id = 0
+            rec = []
+            for obj in objs:
+                if 'keypoints' not in obj:
+                    continue
+                if max(obj['keypoints']) == 0:
+                    continue
+                if 'num_keypoints' in obj and obj['num_keypoints'] == 0:
+                    continue
+                joints_3d = np.zeros((num_joints, 3), dtype=np.float32)
+                joints_3d_visible = np.zeros((num_joints, 3), dtype=np.float32)
 
-          keypoints = np.array(obj['keypoints']).reshape(-1, 3)
-          joints_3d[:, :2] = keypoints[:, :2]
-          joints_3d_visible[:, :2] = np.minimum(1, keypoints[:, 2:3])
+                keypoints = np.array(obj['keypoints']).reshape(-1, 3)
+                joints_3d[:, :2] = keypoints[:, :2]
+                joints_3d_visible[:, :2] = np.minimum(1, keypoints[:, 2:3])
 
-          center, scale = self._xywh2cs(*obj['clean_bbox'][:4])  ##why are we converting bounding box to two params?
+                center, scale = self._xywh2cs(*obj['clean_bbox'][:4]) 
 
-          image_file = os.path.join(self.img_directory, self.id2name[img_id]) 
-          rec.append({
-              'image_file': image_file,
-              'center': center,
-              'scale': scale,
-              'bbox': obj['clean_bbox'][:4],
-              'rotation': 0,
-              'joints_3d': joints_3d,
-              'joints_3d_visible': joints_3d_visible,
-              'bbox_score': 1,
-              'bbox_id': bbox_id
-          })
-          bbox_id = bbox_id + 1
-
-      return rec
+                image_file = os.path.join(self.img_directory, self.id2name[img_id]) 
+                rec.append({
+                    'image_file': image_file,
+                    'center': center,
+                    'scale': scale,
+                    'bbox': obj['clean_bbox'][:4],
+                    'rotation': 0,
+                    'joints_3d': joints_3d,
+                    'joints_3d_visible': joints_3d_visible,
+                    'bbox_score': 1,
+                    'bbox_id': bbox_id
+                })
+                bbox_id = bbox_id + 1
+                gt_db.extend(rec)
+        return gt_db
       
     def _get_mapping_id_name(self):
         """
+        Credit : VitPose- https://github.com/ViTAE-Transformer/ViTPose
         Args:
             imgs (dict): dict of image info.
         Returns:
@@ -189,7 +167,9 @@ class LoadDataset(Dataset):
 
     def _xywh2cs(self, x, y, w, h, padding=1.25):
 
-        """This encodes bbox(x,y,w,h) into (center, scale)
+        """
+        Credit : VitPose- https://github.com/ViTAE-Transformer/ViTPose
+        This encodes bbox(x,y,w,h) into (center, scale)
         Args:
             x, y, w, h (float): left, top, width and height
             padding (float): bounding box padding factor
@@ -215,7 +195,10 @@ class LoadDataset(Dataset):
 
         return center, scale
     def get_affine_transform(self, image_data):
+        '''
+        Credit : VitPose- https://github.com/ViTAE-Transformer/ViTPose
         
+        '''
         rotation = image_data["rotation"]
         center = image_data["center"]
         scale = image_data["scale"]
@@ -248,7 +231,9 @@ class LoadDataset(Dataset):
         return img, joints_3d     
 
     def get_warp_matrix(self, theta, size_input, size_dst, size_target):
-        """Calculate the transformation matrix under the constraint of unbiased.
+        """
+        Credit : VitPose- https://github.com/ViTAE-Transformer/ViTPose
+        Calculate the transformation matrix under the constraint of unbiased.
         Paper ref: Huang et al. The Devil is in the Details: Delving into Unbiased
         Data Processing for Human Pose Estimation (CVPR 2020).
 
@@ -279,7 +264,9 @@ class LoadDataset(Dataset):
 
 
     def warp_affine_joints(self,joints, mat):
-        """Apply affine transformation defined by the transform matrix on the
+        """
+        Credit : VitPose- https://github.com/ViTAE-Transformer/ViTPose
+        Apply affine transformation defined by the transform matrix on the
         joints.
 
         Args:
@@ -298,7 +285,9 @@ class LoadDataset(Dataset):
 
 
     def _udp_generate_target(self, joints_3d, joints_3d_visible, sigma):
-        """Generate the target heatmap via 'UDP' approach. Paper ref: Huang et
+        """
+        Credit : VitPose- https://github.com/ViTAE-Transformer/ViTPose
+        Generate the target heatmap via 'UDP' approach. Paper ref: Huang et
         al. The Devil is in the Details: Delving into Unbiased Data Processing
         for Human Pose Estimation (CVPR 2020).
         Note:
@@ -381,59 +370,3 @@ class LoadDataset(Dataset):
 
         return np.moveaxis(target,0,-1), target_weight
 
-    
-    # def collate_fn(self, data):
-    #     """Creates mini-batch tensors from the list of tuples (image, caption).
-        
-    #     We should build custom collate_fn rather than using default collate_fn, 
-    #     because merging caption (including padding) is not supported in default.
-    #     Args:
-    #         data: list of tuple (image, caption). 
-    #             - image: torch tensor of shape (3, 256, 256).
-    #             - caption: torch tensor of shape (?); variable length.
-    #     Returns:
-    #         images: torch tensor of shape (batch_size, 3, 256, 256).
-    #         targets: torch tensor of shape (batch_size, padded_length).
-    #         lengths: list; valid length for each padded caption.
-    #     """
-    #     # images = data[0]
-    #     # targets = data[1]
-    #     # target_weights = data[2]
-    #     # get image as a tensor
-    #     print("HERE!!")
-    #     # print(data[0])
-    #     print(len(data))
-    #     img_paths = data['image_file']
-    #     batch = len(img_paths)
-    #     images = torch.Tensor(batch, 3,self.image_size[0], self.image_size[1])
-    #     targets = torch.Tensor(batch, self.num_joints, self.heatmap_size[0],self.heatmap_size[1])
-    #     target_weights = torch.Tensor(batch, self.num_joints, 1)
-    #     img_list = []
-    #     tgt_list = []
-    #     tw_list = []
-
-    #     for i in range(len(img_paths)):
-    #        image = Image.open(os.path.normpath(img_paths[i])).convert('RGB')
-    #        image = self.transform(image)
-    #        target,target_weight = self._udp_generate_target(data["joints_3d"][i], data["joints_3d_visible"][i], 2)
-    #        target = self.transform_to_tensor(target)
-    #        target_weight = self.transform_to_tensor(target_weight)
-    #        img_list.append(image)
-    #        tgt_list.append(target)
-    #        tw_list.append(target_weight)
-
-    #     # print(img_list[0].shape)
-    #     torch.cat(img_list, out=images)
-    #     torch.cat(tgt_list, out=targets)
-    #     torch.cat(tw_list, out=target_weights)
-        
-    #     return images, targets, target_weights
-    # def get_loader(self,batch_size, shuffle, num_workers):
-    #     """Returns torch.utils.data.DataLoader for custom coco dataset."""
-
-    #     data_loader = torch.utils.data.DataLoader(dataset=self.db, 
-    #                                             batch_size=batch_size,
-    #                                             shuffle=shuffle,
-    #                                             num_workers=num_workers,
-    #                                             collate_fn=self.collate_fn)
-    #     return data_loader

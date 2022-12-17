@@ -49,7 +49,6 @@ class AdaptiveWingLoss(nn.Module):
             target (torch.Tensor[NxKxHxW]): Ground Truth heatmaps. K is number of keypoints and N is batch size
         
         """
-        N, K, H, W = pred.shape
         self.delta = torch.abs(target - pred)
         
         A = self.omega*(1/(1+torch.pow(self.theta/self.epsilon, self.alpha-target)))*torch.pow(self.theta/self.epsilon, self.alpha-target-1)*(self.alpha-target)/self.epsilon
@@ -95,18 +94,22 @@ def _calc_distances(preds, targets, mask, normalize):
     N, K, D = preds.shape
     # set mask=0 when normalize==0
     normalized_mask = mask.copy()
-    normalized_mask[np.where((normalize == 0).sum(1))[0], :] = 0
+    idx= np.where((normalize == 0).sum(1))[0]
+    normalized_mask[idx, :] = 0
     distances = np.full((N, K), -1, dtype=np.float32)
     # handle invalid values
-    normalize[np.where(normalize <= 0)] = 1e6
-
-    distances[normalized_mask.squeeze()] = np.linalg.norm(
-        ((preds - targets) / normalize[:, None, :])[normalized_mask.squeeze()], axis=-1)
+    idx= np.where(normalize <= 0)
+    normalize[idx] = 1e6
+    idx= normalized_mask.squeeze()
+    distances[idx] = np.linalg.norm(
+        ((preds - targets) / normalize[:, None, :])[idx], axis=-1)
     return distances.T
 
 
 def _get_max_preds(heatmaps):
-    """Get keypoint predictions from heat maps.
+    """
+    Credit : VitPose- https://github.com/ViTAE-Transformer/ViTPose
+    Get keypoint predictions from heat maps.
     Note:
         batch_size: N
         num_keypoints: K
@@ -121,8 +124,7 @@ def _get_max_preds(heatmaps):
     """
     N, K, H, W = heatmaps.shape
     heatmaps_reshaped = heatmaps.reshape((N, K, -1))
-    idx = np.argmax(heatmaps_reshaped, 2).reshape((N, K, 1))
-    confidence = np.amax(heatmaps_reshaped, 2).reshape((N, K, 1))
+    confidence, idx = np.max(heatmaps_reshaped, 2).reshape((N, K, 1))
 
     preds = np.tile(idx, (1, 1, 2)).astype(np.float32)
     preds[:, :, 0] = preds[:, :, 0] % W

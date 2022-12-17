@@ -26,7 +26,6 @@ def train_ViTPose(
     model,
     train_loader,
     learning_rate: float = 0.01,
-    weight_decay: float = 1e-4,
     max_iters: int = 500,
     log_period: int = 20,
     num_epochs = 10,
@@ -149,7 +148,7 @@ def train_ViTPose(
                 loss_history.append(total_loss.item())
                 
             else:
-                print("Total_accuracy = ",total_acc/max_iter)
+                print("Total_accuracy = ",total_acc/max_iters)
             
             if not val and (total_acc/max_iters) > 0.8:
                 break
@@ -183,7 +182,6 @@ if __name__ == "__main__":
     batch_size = 25
 
     learning_rate = 2e-3
-    weight_decay = 1e-4
     train_max_iters = train_dataset_size//batch_size
     val_max_iters = val_dataset_size//batch_size
 
@@ -210,39 +208,5 @@ if __name__ == "__main__":
 
     model = ViTPose(in_channels,patch_size,emb_size,img_size,depth,kernel_size,deconv_filter,out_channels)
 
-    train_ViTPose( model, train_loader, learning_rate, weight_decay, train_max_iters, log_period, num_epochs, device, model_save_path,use_checkpoint = True, val = False)
+    train_ViTPose( model, train_loader, learning_rate, train_max_iters, log_period, num_epochs, device, model_save_path,use_checkpoint = True, val = False)
     
-    
-    # val_indices = torch.arange(50000, 60000)
-    # val_10k= data_utils.Subset(train, val_indices)
-
-    # val_loader = torch.utils.data.DataLoader(dataset=val_10k, 
-    #                                             batch_size=batch_size,
-    #                                             shuffle=False,
-    #                                             num_workers=4)
-    # print("Val Dataset Size: ",val_10k.__len__())
-
-    # train_ViTPose( model, val_loader, learning_rate, weight_decay, val_max_iters, log_period, num_epochs, device, model_save_path,val = True)
-    #print(summary(model,input_size=(in_channels, img_size[0], img_size[1])))
-    # tensor, target, weight =  next(iter(val_loader))
-    # # # weight = rearrange(weight, "B C H W ->  B H C W")
-    # # print("Image size: ", tensor[0].shape)
-    # # # print("heatmap size: ", target.shape)
-    # # # print("Target weights: ",weight.shape)
-    # image = tensor_to_image(tensor[5])
-    # data = Image.fromarray(image)
-    # data.show()
-    # print(weight[5])
-    
-    
-     
-
-    
-    
-    
-    
-
-
-
-
-
